@@ -70,7 +70,7 @@ print(f"Ссылка на чек: {receipt.link}")
 
 **auth_by_sms(phone: str) -> dict** - запрос SMS с кодом подтверждения
 
-**verify_sms(code: str, challenge_token: str)** -> UserProfile - подтверждение кода из SMS
+**verify_sms(code: str, challenge_token: str) -> UserProfile** - подтверждение кода из SMS
 
 **auth_by_password(inn: str, password: str) -> UserProfile** - авторизация по ИНН и паролю
 
