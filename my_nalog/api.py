@@ -4,7 +4,7 @@ import pickle
 import os
 import random
 import string
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Optional, Union
 from .exceptions import AuthError, SmsError, ReceiptError, SessionError, NalogAPIError
 from .models import Receipt, UserProfile
@@ -13,6 +13,7 @@ from .models import Receipt, UserProfile
 class NalogRuAPI:
     SESSION_FILE = "nalog_session.pkl"
     BASE_URL = "https://lknpd.nalog.ru/api/v1"
+    SESSION_LIFETIME = timedelta(hours=3)
     
     def __init__(self):
         self.session = requests.Session()
@@ -20,12 +21,13 @@ class NalogRuAPI:
         self.refresh_token = None
         self.phone = None
         self.inn = None
+        self.session_expires = None
         self.device_id = self._generate_device_id()
         self._load_session()
         self.last_challenge_token = None
 
     # ======================
-    # Intenal methods
+    # Internal methods
     # ======================
     
     def _generate_device_id(self, length=32) -> str:
@@ -52,6 +54,7 @@ class NalogRuAPI:
                 'phone': self.phone,
                 'inn': self.inn,
                 'device_id': self.device_id,
+                'session_expires': self.session_expires.isoformat() if self.session_expires else None,
                 'cookies': requests.utils.dict_from_cookiejar(self.session.cookies)
             }
             with open(self.SESSION_FILE, 'wb') as f:
@@ -73,12 +76,23 @@ class NalogRuAPI:
             self.inn = data.get('inn')
             self.device_id = data.get('device_id', self._generate_device_id())
             
+            if expires := data.get('session_expires'):
+                self.session_expires = datetime.fromisoformat(expires)
+                if datetime.now(timezone.utc) >= self.session_expires:
+                    self.logout()
+                    return
+            
             if cookies := data.get('cookies'):
                 self.session.cookies = requests.utils.cookiejar_from_dict(cookies)
         except Exception as e:
             raise SessionError(f"Ошибка загрузки сессии: {str(e)}")
 
     def _make_request(self, endpoint: str, data: Optional[Dict] = None) -> Dict:
+        # Проверяем срок действия сессии перед каждым запросом
+        if self.session_expires and datetime.now(timezone.utc) >= self.session_expires:
+            self.logout()
+            raise AuthError("Сессия истекла. Требуется повторная авторизация.")
+            
         try:
             url = f"{self.BASE_URL}{endpoint}"
             headers = {
@@ -94,14 +108,12 @@ class NalogRuAPI:
                 **(data if data else {})
             }
 
-
             response = self.session.post(
                 url,
                 json=request_data,
                 headers=headers,
                 timeout=30
             )
-
 
             if response.status_code != 200:
                 try:
@@ -138,7 +150,6 @@ class NalogRuAPI:
 
         self.last_challenge_token = response.get('challengeToken')
 
-    
     def verify_sms(self, sms_code: str, challenge_token: str) -> UserProfile:
         if len(sms_code) != 6 or not sms_code.isdigit():
             raise SmsError("Код должен содержать 6 цифр")
@@ -155,6 +166,7 @@ class NalogRuAPI:
         self.token = response['token']
         self.refresh_token = response.get('refreshToken')
         self.inn = response.get('profile', {}).get('inn')
+        self.session_expires = datetime.now(timezone.utc) + self.SESSION_LIFETIME
         self._save_session()
         
         return self._parse_profile(response.get('profile', {}))
@@ -174,6 +186,7 @@ class NalogRuAPI:
         self.token = response['token']
         self.refresh_token = response.get('refreshToken')
         self.inn = inn
+        self.session_expires = datetime.now(timezone.utc) + self.SESSION_LIFETIME
         self._save_session()
         
         return self._parse_profile(response.get('profile', {}))
@@ -230,8 +243,6 @@ class NalogRuAPI:
             "ignoreMaxTotalIncomeRestriction": False
         }
     
-
-        
         try:
             response = self._make_request("/income", receipt_data)
         except NalogAPIError as e:
@@ -259,13 +270,19 @@ class NalogRuAPI:
     # ======================
     
     def is_authenticated(self) -> bool:
-        return bool(self.token)
+        if not self.token:
+            return False
+        if self.session_expires and datetime.now(timezone.utc) >= self.session_expires:
+            self.logout()
+            return False
+        return True
     
     def logout(self):
         self.token = None
         self.refresh_token = None
         self.phone = None
         self.inn = None
+        self.session_expires = None
         self.session.cookies.clear()
         if os.path.exists(self.SESSION_FILE):
             os.remove(self.SESSION_FILE)
