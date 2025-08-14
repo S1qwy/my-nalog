@@ -84,7 +84,7 @@ print(f"Ссылка на чек: {receipt.link}")
 
 #### Дополнительные методы:
 
-**is_authenticated() -> bool** - проверка авторизации
+**is_authenticated() -> bool** - проверка авторизации и жизни сессии
 
 **_save_session()** - сохранение сессии (используется автоматически)
 
@@ -115,6 +115,10 @@ print(f"Ссылка на чек: {receipt.link}")
 **created_at: datetime** - дата создания
 
 **link: str** - ссылка на печатную форму
+
+#### Session
+
+**self.session_expires: datetime | None** - время истечения сессии
 
 ### ⚠️ Обработка ошибок
 
